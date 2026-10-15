@@ -13,7 +13,7 @@ test('PDF generation embeds Unicode text and keeps all original pages', async ()
   template.addPage([500, 700]);
   const bytes = await template.save();
   const name = makeField(0, { x: .15, y: .4, width: .7, height: .1 }, 'Name');
-  const event = { ...makeField(1), source: 'constant', value: 'TECHFUSION 2K26' };
+  const event = { ...makeField(1, undefined, 'Name'), source: 'constant', value: 'Sample event' };
   const result = await generateCertificate(bytes, [name, event], { Name: 'Zoë García – Алексей' }, { fontBytes });
   const output = await PDFDocument.load(result);
   assert.equal(output.getPageCount(), 2);
@@ -27,7 +27,7 @@ test('Rotation and crop boxes map displayed field coordinates back into PDF spac
   page.setCropBox(30, 40, 400, 600);
   page.setRotation(degrees(90));
   assert.deepEqual(pageCoordinates(page), { width: 600, height: 400, matrix: [0, 1, -1, 0, 430, 40] });
-  const result = await generateCertificate(await doc.save(), [makeField()], { Name: 'Aditi Raman' }, { fontBytes });
+  const result = await generateCertificate(await doc.save(), [makeField(0, undefined, 'Name')], { Name: 'Sample Participant' }, { fontBytes });
   const output = await PDFDocument.load(result);
   assert.equal(output.getPage(0).getRotation().angle, 90);
   assert.deepEqual(output.getPage(0).getCropBox(), { x: 30, y: 40, width: 400, height: 600 });
@@ -46,20 +46,20 @@ test('Auto-fit handles long names and multiline values without overflowing', asy
 
 test('Unsupported glyphs and missing custom fonts produce actionable errors', async () => {
   const bytes = await createDemoTemplate();
-  await assert.rejects(() => generateCertificate(bytes, [makeField()], { Name: 'தமிழ்' }, { fontBytes }), /Upload a TTF\/OTF/);
-  await assert.rejects(() => generateCertificate(bytes, [{ ...makeField(), font: 'Custom' }], { Name: 'Aditi' }), /Upload your custom/);
+  await assert.rejects(() => generateCertificate(bytes, [makeField(0, undefined, 'Name')], { Name: 'தமிழ்' }, { fontBytes }), /Upload a TTF\/OTF/);
+  await assert.rejects(() => generateCertificate(bytes, [{ ...makeField(0, undefined, 'Name'), font: 'Custom' }], { Name: 'Sample' }), /Upload your custom/);
 });
 
 test('Combined PDF contains every page of every generated certificate', async () => {
   const template = await PDFDocument.create(); template.addPage(); template.addPage();
   const bytes = await template.save();
-  const outputs = await Promise.all(['Aditi', 'Priya'].map(async (Name) => ({ bytes: await generateCertificate(bytes, [makeField()], { Name }, { fontBytes }) })));
+  const outputs = await Promise.all(['Sample', 'Demo'].map(async (Name) => ({ bytes: await generateCertificate(bytes, [makeField(0, undefined, 'Name')], { Name }, { fontBytes }) })));
   assert.equal((await PDFDocument.load(await mergeCertificates(outputs))).getPageCount(), 4);
 });
 
 test('Layout import validates template identity, pages, coordinates, and styles', async () => {
   const hash = await fingerprint(new Uint8Array([1, 2, 3]));
-  const field = makeField();
+  const field = makeField(0, undefined, 'Name');
   const layout = { version: 1, templateHash: hash, fields: [field] };
   const context = { fingerprint: hash, pageCount: 1 };
   assert.equal(validateLayout(layout, context)[0].name, 'Name');
@@ -74,4 +74,10 @@ test('Dragging and resizing constrain fields to the visible page', () => {
   const rect = constrainRect({ x: -.2, y: .95, width: 2, height: .8 });
   assert.equal(rect.x, 0); assert.equal(rect.width, 1);
   assert.ok(rect.y + rect.height <= 1);
+});
+
+test('New fields stay unnamed, including a saved draft', () => {
+  const field = makeField();
+  assert.equal(field.name, ''); assert.equal(field.column, '');
+  assert.equal(validateLayout({ version: 1, fields: [field] }, { pageCount: 1 })[0].name, '');
 });

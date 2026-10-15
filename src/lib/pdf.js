@@ -1,6 +1,8 @@
+import 'regenerator-runtime/runtime.js';
 import { PDFDocument, StandardFonts, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { resolveValue } from './data.js';
+import { fontKey } from './fonts.js';
 
 export function pageCoordinates(page) {
   const box = page.getCropBox();
@@ -30,22 +32,27 @@ export function fitText(font, text, rect, maxSize, autoFit = true) {
   return { lines, size, ascender: ascender * size, descender: descender * size, height: totalHeight * size };
 }
 
-export async function generateCertificate(templateBytes, fields, row, { rowIndex = 0, fontBytes, customFontBytes } = {}) {
+export async function generateCertificate(templateBytes, fields, row, { rowIndex = 0, fontBytes, customFontBytes, fontData = new Map() } = {}) {
   const doc = await PDFDocument.load(templateBytes.slice());
   doc.registerFontkit(fontkit);
   const fonts = new Map();
-  async function getFont(name) {
-    if (fonts.has(name)) return fonts.get(name);
+  async function getFont(name, style = 'regular') {
+    const key = fontKey(name, style);
+    if (fonts.has(key)) return fonts.get(key);
     let result;
-    if (name === 'NotoSans' || name === 'Custom') {
-      const bytes = name === 'Custom' ? customFontBytes : fontBytes;
+    const standard = {
+      Helvetica: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique, StandardFonts.HelveticaBoldOblique],
+      'Times-Roman': [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic, StandardFonts.TimesRomanBoldItalic],
+      Courier: [StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique, StandardFonts.CourierBoldOblique],
+    };
+    if (!standard[name]) {
+      const bytes = fontData.get(key) ?? (name === 'Custom' ? customFontBytes : name === 'NotoSans' && style === 'regular' ? fontBytes : undefined);
       if (!bytes) throw new Error(name === 'Custom' ? 'Upload your custom TTF/OTF font before generating.' : 'The bundled font could not load. Reload the app and try again.');
       result = await doc.embedFont(bytes, { subset: true });
     } else {
-      const options = { Helvetica: StandardFonts.Helvetica, 'Times-Roman': StandardFonts.TimesRoman, Courier: StandardFonts.Courier };
-      result = await doc.embedFont(options[name] ?? StandardFonts.Helvetica);
+      result = await doc.embedFont(standard[name][['regular', 'bold', 'italic', 'boldItalic'].indexOf(style)] ?? standard[name][0]);
     }
-    fonts.set(name, result);
+    fonts.set(key, result);
     return result;
   }
   for (const field of fields) {
@@ -56,7 +63,7 @@ export async function generateCertificate(templateBytes, fields, row, { rowIndex
     }
     const page = doc.getPage(field.page);
     const { width, height, matrix } = pageCoordinates(page);
-    const font = await getFont(field.font);
+    const font = await getFont(field.font, field.fontStyle);
     const characterSet = new Set(font.getCharacterSet());
     const missing = [...new Set(Array.from(value).filter((char) => char !== '\n' && char !== '\r' && !characterSet.has(char.codePointAt(0))))];
     if (missing.length) throw new Error(`${field.name}: the selected font cannot display ${missing.slice(0, 4).join(' ')}. Upload a TTF/OTF font that supports these characters.`);
@@ -101,17 +108,17 @@ export async function createDemoTemplate() {
   function center(value, y, size, font = sans, color = navy) {
     page.drawText(value, { x: (842 - font.widthOfTextAtSize(value, size)) / 2, y, size, font, color });
   }
-  center('AAA COLLEGE OF ENGINEERING AND TECHNOLOGY', 507, 15, bold);
-  center('Department of Computer Science and Engineering', 482, 12);
+  center('YOUR ORGANIZATION', 507, 15, bold);
+  center('Your department', 482, 12);
   center('CERTIFICATE', 413, 46, serif);
   center('OF PARTICIPATION', 384, 14, bold, blue);
   center('This certificate is proudly presented to', 339, 13);
   page.drawLine({ start: { x: 165, y: 260 }, end: { x: 677, y: 260 }, thickness: .6, color: gold });
   center('for their participation in', 226, 12);
-  center('National Level Technical Symposium', 157, 12);
+  center('Your event or program', 157, 12);
   page.drawLine({ start: { x: 95, y: 93 }, end: { x: 245, y: 93 }, thickness: .5, color: navy });
   page.drawLine({ start: { x: 597, y: 93 }, end: { x: 747, y: 93 }, thickness: .5, color: navy });
-  page.drawText('Faculty coordinator', { x: 110, y: 72, size: 10, font: sans, color: navy });
-  page.drawText('Head of department', { x: 613, y: 72, size: 10, font: sans, color: navy });
+  page.drawText('Authorized signatory', { x: 110, y: 72, size: 10, font: sans, color: navy });
+  page.drawText('Authorized signatory', { x: 613, y: 72, size: 10, font: sans, color: navy });
   return doc.save();
 }

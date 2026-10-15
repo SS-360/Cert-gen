@@ -3,5 +3,9 @@ dist/
 public/pdfjs/
 test-results/
 playwright-report/
+.vercel/
+*.csv
+*.xlsx
+*.pdf
 .env*
 !.env.example
