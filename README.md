@@ -10,7 +10,7 @@ A browser-based certificate studio that turns your PDF template and recipient sp
 
 [![Checks](https://github.com/SS-360/Cert-gen/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/SS-360/Cert-gen/actions/workflows/ci.yml)
 
-**[Open CertGen →](https://certgen-ss-360.vercel.app)**
+**[Open CertGen →](https://certgen.samsankar.co.in)** · [Vercel mirror](https://certgen-ss-360.vercel.app)
 
 [Getting started](#getting-started) · [Workflow](#certificate-workflow) · [Privacy](#privacy-and-local-storage) · [Deployment](#build-and-deploy) · [Contributing](#contributing)
 
@@ -177,6 +177,8 @@ GitHub Actions runs core tests, the production build, Chromium workflows, and a 
 | App does not run from a local file | Start `npm run dev` or serve the built `dist/` directory. |
 
 ## Contributing
+
+Read the [contribution rules](CONTRIBUTING.md) before opening a pull request. Changes to `master` use pull requests and the required `verify` CI check; force pushes and branch deletion are blocked.
 
 Use fictional fixtures, keep runtime assets same-origin, and preserve local-only processing. Add regression tests for behaviour changes and run the checks above before submitting a pull request. Never commit private documents, recipient lists, credentials, or `.vercel` configuration.
 
