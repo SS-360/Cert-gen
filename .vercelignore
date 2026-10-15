@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.git/
+.vercel/
+.env*
+tests/
+test-results/
+playwright-report/
+public/pdfjs/
+**/*.csv
+**/*.xlsx
+**/*.pdf
