@@ -10,7 +10,7 @@ A browser-based certificate studio that turns your PDF template and recipient sp
 
 [![Checks](https://github.com/SS-360/Cert-gen/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/SS-360/Cert-gen/actions/workflows/ci.yml)
 
-**[Open CertGen →](https://certgen-ss-360.vercel.app)**
+**[Open CertGen →](https://certgen.samsankar.co.in)** · [Vercel mirror](https://certgen-ss-360.vercel.app)
 
 [Getting started](#getting-started) · [Workflow](#certificate-workflow) · [Privacy](#privacy-and-local-storage) · [Deployment](#build-and-deploy) · [Contributing](#contributing)
 
