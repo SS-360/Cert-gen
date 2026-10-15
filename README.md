@@ -178,6 +178,8 @@ GitHub Actions runs core tests, the production build, Chromium workflows, and a 
 
 ## Contributing
 
+Read the [contribution rules](CONTRIBUTING.md) before opening a pull request. Changes to `master` use pull requests and the required `verify` CI check; force pushes and branch deletion are blocked.
+
 Use fictional fixtures, keep runtime assets same-origin, and preserve local-only processing. Add regression tests for behaviour changes and run the checks above before submitting a pull request. Never commit private documents, recipient lists, credentials, or `.vercel` configuration.
 
 ## Licence
