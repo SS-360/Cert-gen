@@ -61,19 +61,19 @@ test('Sample project previews and exports correct individual PDFs, ZIP, and comb
   await screenshot(page, 'certgen-preview-desktop.png');
   const preview = await downloadBytes(page, () => page.getByRole('button', { name: 'PDF', exact: true }).click());
   const previewText = (await pdfTexts(page, preview.bytes)).flat().map((item) => item.text).join(' ');
-  expect(previewText).toContain('Aditi Raman');
-  expect(previewText).toContain('TECHFUSION 2K26');
-  expect(previewText).toContain('TF26-0001');
+  expect(previewText).toContain('Sample Participant');
+  expect(previewText).toContain('Sample event');
+  expect(previewText).toContain('CERT-0001');
   await page.getByRole('button', { name: 'Generate 3 certificates', exact: true }).click();
   await expect(page.locator('#download-results')).toContainText('3 certificates ready');
   const zipDownload = await downloadBytes(page, () => page.getByRole('button', { name: 'Download ZIP (3)' }).click());
   const zip = await JSZip.loadAsync(zipDownload.bytes);
   const files = Object.keys(zip.files).filter((name) => name.endsWith('.pdf'));
   expect(files).toHaveLength(3);
-  const priya = await zip.file(files.find((name) => name.includes('Priya'))).async('uint8array');
+  const priya = await zip.file(files.find((name) => name.includes('Demo'))).async('uint8array');
   const priyaText = (await pdfTexts(page, priya)).flat().map((item) => item.text).join(' ');
-  expect(priyaText).toContain('Priya K.');
-  expect(priyaText).toContain('TF26-0003');
+  expect(priyaText).toContain('Demo Participant');
+  expect(priyaText).toContain('CERT-0003');
   expect(await zip.file('generation-report.csv').async('string')).toContain('Generated');
   const merged = await downloadBytes(page, () => page.getByRole('button', { name: 'One combined PDF' }).click());
   expect((await PDFDocument.load(merged.bytes)).getPageCount()).toBe(3);
@@ -84,7 +84,7 @@ test('Sample project previews and exports correct individual PDFs, ZIP, and comb
 test('CSV import supports quoted duplicate names and case-insensitive column mapping', async ({ page }) => {
   await openSample(page);
   await page.getByRole('button', { name: 'Add recipients', exact: true }).click();
-  await page.locator('#data-input').setInputFiles({ name: 'recipients.csv', mimeType: 'text/csv', buffer: Buffer.from('\uFEFFFull Name,College\n"Raman, Priya",AAACET\n"Raman, Priya",AAACET\nZoë García,AAACET') });
+  await page.locator('#data-input').setInputFiles({ name: 'recipients.csv', mimeType: 'text/csv', buffer: Buffer.from('\uFEFFFull Name,College\n"Participant, Example",Sample institution\n"Participant, Example",Sample institution\nZoë García,Sample institution') });
   await expect(page.locator('#data-file-label')).toContainText('3 recipients');
   await expect(page.getByLabel('Map Name to column')).toHaveValue('Full Name');
   await page.getByRole('button', { name: 'Preview certificates', exact: true }).click();
@@ -93,7 +93,7 @@ test('CSV import supports quoted duplicate names and case-insensitive column map
   await expect(page.locator('#download-results')).toContainText('3 certificates ready');
   const output = await downloadBytes(page, () => page.getByRole('button', { name: 'Download ZIP (3)' }).click());
   const zip = await JSZip.loadAsync(output.bytes);
-  expect(Object.keys(zip.files).filter((name) => name.includes('Raman, Priya'))).toHaveLength(2);
+  expect(Object.keys(zip.files).filter((name) => name.includes('Participant, Example'))).toHaveLength(2);
   const zoeName = Object.keys(zip.files).find((name) => name.includes('Zoë'));
   expect((await pdfTexts(page, await zip.file(zoeName).async('uint8array'))).flat().map((item) => item.text).join(' ')).toContain('Zoë García');
 });
@@ -101,7 +101,7 @@ test('CSV import supports quoted duplicate names and case-insensitive column map
 test('Missing required values block export and unsupported scripts report explicit failures', async ({ page }) => {
   await openSample(page);
   await page.getByRole('button', { name: 'Add recipients', exact: true }).click();
-  await page.locator('#data-input').setInputFiles({ name: 'missing.csv', mimeType: 'text/csv', buffer: Buffer.from('Name,College\n,AAACET') });
+  await page.locator('#data-input').setInputFiles({ name: 'missing.csv', mimeType: 'text/csv', buffer: Buffer.from('Name,College\n,Sample institution') });
   await page.getByRole('button', { name: 'Preview certificates', exact: true }).click();
   await expect(page.locator('#export-validation')).toContainText('Row 1: Name is empty');
   await expect(page.locator('#generate-button')).toBeDisabled();
@@ -123,18 +123,22 @@ test('Rotated, cropped, multi-page templates retain accurate fields across zoom 
   await page.goto('/');
   await page.locator('#template-input').setInputFiles({ name: 'rotated.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await template.save()) });
   await expect(page.locator('#template-info')).toContainText('2 pages');
-  await page.getByRole('button', { name: 'Design fields', exact: true }).click();
+  await page.locator('#template-next').click();
   await page.getByLabel('Template page').selectOption('1');
   await page.getByRole('button', { name: 'Add field', exact: true }).click();
+  await page.getByLabel('Field name', { exact: true }).fill('Name');
+  await page.getByLabel('Field name', { exact: true }).press('Tab');
+  await page.getByText('Position & size', { exact: true }).click();
   await page.getByLabel('Field left position', { exact: true }).fill('20');
   await page.getByLabel('Field left position', { exact: true }).press('Tab');
   const original = await page.locator('.field-box').getAttribute('style');
   await page.getByLabel('Template zoom').selectOption('1.5');
   await expect(page.locator('.field-box')).toHaveAttribute('style', original);
-  const layout = await downloadBytes(page, () => page.getByRole('button', { name: 'Save layout' }).click());
-  expect(JSON.parse(layout.bytes.toString()).fields[0].page).toBe(1);
+  await page.getByRole('button', { name: 'Save layout' }).click();
+  await expect(page.locator('#toast')).toContainText('saved in this browser only');
+  expect(await page.evaluate(async () => (await (await import('/src/lib/template-store.js')).listTemplates())[0].layout.fields[0].page)).toBe(1);
   await page.getByRole('button', { name: 'Add recipients', exact: true }).click();
-  await page.locator('#data-input').setInputFiles({ name: 'one.csv', mimeType: 'text/csv', buffer: Buffer.from('Name\nAditi Raman') });
+  await page.locator('#data-input').setInputFiles({ name: 'one.csv', mimeType: 'text/csv', buffer: Buffer.from('Name\nSample Participant') });
   await page.getByRole('button', { name: 'Preview certificates', exact: true }).click();
   await expect(page.locator('#preview-canvas')).toBeVisible();
   await page.getByLabel('Preview page').selectOption('1');
@@ -145,7 +149,7 @@ test('Rotated, cropped, multi-page templates retain accurate fields across zoom 
   expect(output.getPage(1).getRotation().angle).toBe(90);
   const texts = await pdfTexts(page, preview.bytes);
   expect(texts[0]).toHaveLength(0);
-  expect(texts[1].map((item) => item.text).join(' ')).toContain('Aditi Raman');
+  expect(texts[1].map((item) => item.text).join(' ')).toContain('Sample Participant');
 });
 
 async function makeXlsx() {
@@ -154,7 +158,7 @@ async function makeXlsx() {
   zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
   zip.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Recipients" sheetId="1" r:id="rId1"/></sheets></workbook>');
   zip.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
-  zip.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Full Name</t></is></c><c r="B1" t="inlineStr"><is><t>College</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Priya Raman</t></is></c><c r="B2" t="inlineStr"><is><t>AAACET</t></is></c></row></sheetData></worksheet>');
+  zip.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Full Name</t></is></c><c r="B1" t="inlineStr"><is><t>College</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Example Participant</t></is></c><c r="B2" t="inlineStr"><is><t>Sample institution</t></is></c></row></sheetData></worksheet>');
   return zip.generateAsync({ type: 'nodebuffer' });
 }
 
@@ -163,7 +167,7 @@ test('Excel upload imports rows and maps columns', async ({ page }) => {
   await page.getByRole('button', { name: 'Add recipients', exact: true }).click();
   await page.locator('#data-input').setInputFiles({ name: 'recipients.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: await makeXlsx() });
   await expect(page.locator('#data-file-label')).toContainText('1 recipients');
-  await expect(page.getByLabel('Row 1 Full Name', { exact: true })).toHaveValue('Priya Raman');
+  await expect(page.getByLabel('Row 1 Full Name', { exact: true })).toHaveValue('Example Participant');
   await expect(page.getByLabel('Map Name to column')).toHaveValue('Full Name');
 });
 
@@ -221,30 +225,38 @@ test('Pointer drawing and saved layouts restore accurate positions', async ({ pa
   await page.mouse.move(bounds.x + bounds.width * .65, bounds.y + bounds.height * .27, { steps: 12 });
   await page.mouse.up();
   await expect(page.locator('.field-box')).toHaveCount(4);
-  await expect(page.getByLabel('Field name', { exact: true })).toHaveValue('Date');
-  const layout = await downloadBytes(page, () => page.getByRole('button', { name: 'Save layout' }).click());
-  const config = JSON.parse(layout.bytes.toString());
+  await expect(page.getByLabel('Field name', { exact: true })).toHaveValue('');
+  await page.getByLabel('Field name', { exact: true }).fill('Date');
+  await page.getByLabel('Field name', { exact: true }).press('Tab');
+  await page.getByRole('button', { name: 'Save layout' }).click();
+  await expect(page.locator('#toast')).toContainText('saved in this browser only');
+  const config = await page.evaluate(async () => {
+    const { listTemplates } = await import('/src/lib/template-store.js');
+    return (await listTemplates())[0].layout;
+  });
   const drawn = config.fields.find((field) => field.name === 'Date');
   expect(drawn.x).toBeCloseTo(.3, 2);
   expect(drawn.width).toBeCloseTo(.35, 2);
+  await page.getByText('Position & size', { exact: true }).click();
   await page.getByLabel('Field left position', { exact: true }).fill('45');
   await page.getByLabel('Field left position', { exact: true }).press('Tab');
-  await page.locator('#layout-input').setInputFiles({ name: 'layout.json', mimeType: 'application/json', buffer: layout.bytes });
+  await page.locator('#layout-input').setInputFiles({ name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(config)) });
   await expect(page.locator('.field-box')).toHaveCount(4);
   await page.locator('[data-select-field]').filter({ hasText: 'Date' }).click();
+  await page.getByText('Position & size', { exact: true }).click();
   await expect(page.getByLabel('Field left position', { exact: true })).toHaveValue('30.0');
 });
 
 test('Custom font upload and recipient changes produce fresh previews', async ({ page }) => {
   await openSample(page);
   await page.locator('#custom-font-input').setInputFiles(fileURLToPath(new URL('../../public/fonts/NotoSans-Regular.ttf', import.meta.url)));
-  await expect(page.getByLabel('Field font', { exact: true })).toHaveValue('Custom');
+  await expect(page.getByRole('button', { name: 'Field font', exact: true })).toHaveAttribute('value', 'Custom');
   await toExport(page);
   await page.getByLabel('Preview recipient').selectOption('1');
   await expect(page.locator('#preview-canvas')).toBeVisible();
   const output = await downloadBytes(page, () => page.getByRole('button', { name: 'PDF', exact: true }).click());
   const text = (await pdfTexts(page, output.bytes)).flat().map((item) => item.text).join(' ');
-  expect(text).toContain('Rahul Subramanian');
-  expect(text).toContain('TF26-0002');
-  expect(text).not.toContain('Aditi Raman');
+  expect(text).toContain('Example Participant');
+  expect(text).toContain('CERT-0002');
+  expect(text).not.toContain('Sample Participant');
 });

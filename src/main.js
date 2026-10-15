@@ -1,7 +1,13 @@
 import './styles.css';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { MAX_ROWS, MAX_TEMPLATE_BYTES, importRecipients, matchColumn, validateRecipients, recipientName, certificateFilename, escapeHtml as esc, toCsv } from './lib/data.js';
+import { MAX_ROWS, MAX_TEMPLATE_BYTES, importRecipients, matchColumn, validateRecipients, recipientName, certificateFilename, escapeHtml as esc, toCsv, resolveValue } from './lib/data.js';
 import { LAYOUT_VERSION, makeField, constrainRect, clamp, validateLayout, fingerprint } from './lib/layout.js';
+import { getFontDefinition, getFontFace, fontFamily } from './lib/fonts.js';
+import { loadFont, loadCustomFont, certificateFonts } from './lib/font-loader.js';
+import { normalizeHex } from './lib/color.js';
+import { createEditorControls } from './editor-controls.js';
+import { startPageRender, commitPageRender } from './lib/pdf-preview.js';
+import { saveTemplate, listTemplates, getTemplate, deleteTemplate } from './lib/template-store.js';
 
 let pdfjs;
 async function loadPdfRenderer() {
@@ -29,6 +35,7 @@ const shapes = {
   lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/>',
   spark: '<path d="m12 3 2.3 6.7L21 12l-6.7 2.3L12 21l-2.3-6.7L3 12l6.7-2.3z"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
+  eyedropper: '<path d="m15 3 6 6M14 7l3-3 3 3-3 3M15 8 4 19l-1 3 3-1L17 10M6 17l3 3"/>',
 };
 const icon = (name) => `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${shapes[name] ?? shapes.info}</svg>`;
 document.querySelectorAll('[data-icon]').forEach((node) => { node.innerHTML = icon(node.dataset.icon); });
@@ -37,15 +44,37 @@ const state = {
   step: 1, file: null, bytes: null, pdf: null, hash: '', fields: [], selected: null,
   page: 0, headers: [], rows: [], imported: false, dataFilename: '', tablePage: 0, search: '',
   customFont: null, customFontName: '', results: [], failures: [], generating: false, controller: null,
-  previewIndex: 0, previewPage: 0, previewBytes: null, previewPdf: null,
+  previewIndex: 0, previewPage: 0, previewBytes: null, previewPdf: null, fontVersion: 0,
 };
-let fontPromise;
 let editorTask;
 let editorToken = 0;
+let editorTimer;
+let editorRequestKey = '';
 let previewTask;
 let previewToken = 0;
 let activeGesture;
 let toastTimer;
+const selectedField = () => state.fields.find((field) => field.id === state.selected);
+function sampleText(field) {
+  if (!field) return 'Sample text';
+  if (field.previewText) return field.previewText;
+  const value = resolveValue(field, state.rows[state.previewIndex] ?? {}, state.previewIndex);
+  if (value) return value;
+  return 'Sample text';
+}
+function setFieldColor(value) {
+  const field = selectedField();
+  const hex = normalizeHex(value);
+  if (!field || !hex) return;
+  field.color = hex; invalidate(); renderSelections();
+  const input = $('[data-field-prop="color"]'); if (input) { input.value = hex.toUpperCase(); input.setCustomValidity(''); }
+  const swatch = $('[data-action="choose-color"]'); if (swatch) swatch.style.background = hex;
+}
+const editorControls = createEditorControls({ selectedField, sampleText, customFontName: () => state.customFontName,
+  onFont: async (id) => { const field = selectedField(); field.font = id; field.fontStyle = getFontFace(id, field.fontStyle).id; invalidate(); renderFieldSidebar(); renderSelections(); },
+  onColor: setFieldColor,
+  onError: (error) => notice(errorMessage(error)),
+});
 
 function notice(message = '', success = false) {
   const node = $('#notice');
@@ -92,14 +121,17 @@ function updateNavigation() {
     }
   });
   $('#save-layout').disabled = !state.fields.length || state.generating;
+  $('#sidebar-fields').hidden = state.step !== 2;
 }
 
 async function goToStep(step) {
   if (state.generating) return;
   if (step > 1 && !state.pdf) throw new Error('Upload a PDF template first.');
   if (step > 2 && !state.fields.length) throw new Error('Add at least one field to your template.');
+  if (step > 2 && state.fields.some((field) => !field.name.trim())) throw new Error('Give each field a name in Text properties before adding recipients.');
   if (step > 3 && !state.rows.length) throw new Error('Import your list or add a recipient first.');
   state.step = step;
+  if (step !== 2) { clearTimeout(editorTimer); ++editorToken; editorTask?.cancel(); editorRequestKey = ''; }
   clearTimeout(toastTimer);
   $('#toast').hidden = true;
   notice();
@@ -123,6 +155,7 @@ async function loadTemplate(file) {
   catch (error) { throw new Error(error.name === 'PasswordException' ? 'This PDF is password protected. Upload an unlocked copy.' : 'This PDF could not be opened. Choose a valid, unlocked PDF.'); }
   if (state.pdf) await state.pdf.loadingTask.destroy();
   state.file = file;
+  $('#project-name').textContent = file.name;
   state.bytes = bytes;
   state.pdf = pdf;
   state.hash = await fingerprint(bytes);
@@ -142,55 +175,119 @@ async function loadTemplate(file) {
   $('#template-info').innerHTML = `<div><strong>${esc(file.name)}</strong><p>${pdf.numPages} page${pdf.numPages === 1 ? '' : 's'} · ${(file.size / 1024 / 1024).toFixed(2)} MB · ready to personalize</p></div><button type="button" class="text-button" data-action="replace-template">Replace</button>`;
   $('#editor-page').innerHTML = Array.from({ length: pdf.numPages }, (_, page) => `<option value="${page}">${page + 1} of ${pdf.numPages}</option>`).join('');
   $('#editor-zoom').value = '1';
+  $('#preview-zoom').value = '1';
   notice();
   invalidate();
   toast('Template loaded. Your original PDF remains unchanged.');
 }
 
-async function renderEditor() {
-  if (!state.pdf || state.step !== 2) return;
-  const token = ++editorToken;
-  if (editorTask) { editorTask.cancel(); try { await editorTask.promise; } catch { /* superseded render */ } }
-  const page = await state.pdf.getPage(state.page + 1);
-  if (token !== editorToken) return;
-  const original = page.getViewport({ scale: 1 });
-  const available = Math.max($('#editor-scroll').clientWidth - (innerWidth < 800 ? 30 : 50), 200);
-  const scale = Math.min(available / original.width, 1.5) * Number($('#editor-zoom').value);
-  const viewport = page.getViewport({ scale });
-  const canvas = $('#editor-canvas');
-  const ratio = Math.min(devicePixelRatio || 1, 2);
-  canvas.width = Math.ceil(viewport.width * ratio);
-  canvas.height = Math.ceil(viewport.height * ratio);
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
-  $('#editor-surface').style.width = `${viewport.width}px`;
-  $('#editor-surface').style.height = `${viewport.height}px`;
-  $('#page-dimensions').textContent = `${Math.round(original.width)} × ${Math.round(original.height)} pt`;
-  editorTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
-  try { await editorTask.promise; } catch (error) { if (error.name !== 'RenderingCancelledException') throw error; }
-  if (token === editorToken) renderSelections();
+function availablePageWidth(selector) {
+  const element = $(selector);
+  const style = getComputedStyle(element);
+  return Math.max(element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), 200);
 }
 
-function renderSelections() {
-  $('#field-layer').innerHTML = state.fields.filter((field) => field.page === state.page).map((field) => `<div tabindex="0" role="button" aria-label="Select ${esc(field.name)} field" class="field-box ${field.id === state.selected ? 'selected' : ''}" data-field-box="${esc(field.id)}" style="left:${field.x * 100}%;top:${field.y * 100}%;width:${field.width * 100}%;height:${field.height * 100}%"><span class="field-label">${esc(field.name)}</span><span class="resize-handle" data-resize="true" aria-hidden="true"></span></div>`).join('');
+function editorKey() {
+  return JSON.stringify([state.hash, state.page, availablePageWidth('#editor-scroll'), $('#editor-zoom').value, $('#show-samples').checked, state.fontVersion,
+    state.fields.filter((field) => field.page === state.page).map((field) => [field.x, field.y, field.width, field.height, field.font, field.fontStyle, field.fontSize, field.color, field.align, field.autoFit, sampleText(field)])]);
+}
+
+function editorStatus(status, message) {
+  $('#editor-canvas').dataset.renderState = status;
+  $('#editor-canvas').setAttribute('aria-busy', String(status === 'pending'));
+  $('#editor-preview-status').textContent = message;
+  $('#editor-preview-status').classList.toggle('danger', status === 'error');
+}
+
+function queueEditorPreview() {
+  if (!state.pdf || state.step !== 2) return;
+  const key = editorKey();
+  if (key === editorRequestKey) return;
+  editorRequestKey = key;
+  const token = ++editorToken;
+  clearTimeout(editorTimer);
+  editorTask?.cancel();
+  editorStatus('pending', 'Updating PDF preview…');
+  editorTimer = setTimeout(() => { void renderEditor(token).catch((error) => notice(errorMessage(error))); }, 100);
+}
+
+async function renderEditor(token) {
+  if (!state.pdf || state.step !== 2) return;
+  clearTimeout(editorTimer);
+  if (token === undefined) { token = ++editorToken; editorRequestKey = editorKey(); }
+  editorStatus('pending', 'Updating PDF preview…');
+  if (editorTask) { editorTask.cancel(); try { await editorTask.promise; } catch { /* superseded render */ } }
+  if (token !== editorToken) return;
+  let generatedPdf;
+  let pdf = state.pdf;
+  let textError = '';
+  const showSamples = $('#show-samples').checked;
+  try {
+    if (showSamples && state.fields.some((field) => field.page === state.page)) {
+      // Render sample values through the exact export engine, not HTML font estimates.
+      const fields = state.fields.filter((field) => field.page === state.page).map((field) => ({ ...field, source: 'constant', value: sampleText(field), required: false }));
+      try {
+        const fontData = await certificateFonts(fields);
+        if (token !== editorToken) return;
+        const { generateCertificate } = await import('./lib/pdf.js');
+        const bytes = await generateCertificate(state.bytes, fields, {}, { fontData, customFontBytes: state.customFont });
+        if (token !== editorToken) return;
+        generatedPdf = await pdfjs.getDocument({ ...pdfOptions, data: bytes }).promise;
+        pdf = generatedPdf;
+      } catch (error) { textError = errorMessage(error); }
+    }
+    if (token !== editorToken) return;
+    const page = await pdf.getPage(state.page + 1);
+    if (token !== editorToken) return;
+    const render = startPageRender(page, availablePageWidth('#editor-scroll'), Number($('#editor-zoom').value));
+    editorTask = render.task;
+    await render.task.promise;
+    if (token !== editorToken || state.step !== 2) return;
+    commitPageRender(render, $('#editor-canvas'));
+    $('#editor-surface').style.width = `${render.geometry.width}px`;
+    $('#editor-surface').style.height = `${render.geometry.height}px`;
+    $('#page-dimensions').textContent = `${Math.round(render.original.width)} × ${Math.round(render.original.height)} pt`;
+    editorStatus(textError ? 'error' : 'ready', textError ? `Text preview unavailable: ${textError}` : showSamples ? 'PDF-accurate text preview' : 'Original template · text hidden');
+    renderSelections(false);
+  } catch (error) {
+    if (token === editorToken && error.name !== 'RenderingCancelledException') { editorRequestKey = ''; editorStatus('error', errorMessage(error)); }
+  } finally {
+    if (generatedPdf) await generatedPdf.loadingTask.destroy();
+  }
+}
+
+function renderSelections(refresh = true) {
+  $('#field-layer').innerHTML = state.fields.filter((field) => field.page === state.page).map((field) => `<div tabindex="0" role="button" aria-label="Select ${esc(field.name)} field" class="field-box ${field.id === state.selected ? 'selected' : ''}" data-field-box="${esc(field.id)}" style="left:${field.x * 100}%;top:${field.y * 100}%;width:${field.width * 100}%;height:${field.height * 100}%"><span class="field-label">${esc(field.name || 'Unnamed field')}</span><span class="resize-handle" data-resize="true" aria-hidden="true"></span></div>`).join('');
+  if (!$('#show-samples').checked) { if (refresh) queueEditorPreview(); return; }
+  state.fields.filter((field) => field.page === state.page).forEach((field) => {
+    const box = document.querySelector(`[data-field-box="${field.id}"]`);
+    const span = document.createElement('span');
+    // Accessible sample copy only. Visible lettering lives exclusively in the PDF canvas.
+    span.className = 'field-sample'; span.textContent = sampleText(field);
+    box.append(span);
+  });
+  if (refresh) queueEditorPreview();
 }
 
 function renderFieldSidebar() {
   $('#field-count').textContent = state.fields.length;
-  $('#field-list').innerHTML = state.fields.map((field) => `<button type="button" class="field-item ${field.id === state.selected ? 'active' : ''}" data-select-field="${esc(field.id)}">${icon('select')}<strong>${esc(field.name)}</strong><span>p. ${field.page + 1}</span></button>`).join('');
+  $('#field-list').innerHTML = state.fields.map((field) => `<button type="button" class="field-item ${field.id === state.selected ? 'active' : ''}" data-select-field="${esc(field.id)}">${icon('select')}<strong>${esc(field.name || 'Unnamed field')}</strong><span>p. ${field.page + 1}</span></button>`).join('');
   const field = state.fields.find((item) => item.id === state.selected);
   if (!field) { $('#field-inspector').innerHTML = '<p class="empty-inspector">Draw a box over the name or another blank area on your template. You can also use “Add field”.</p>'; return; }
   const options = (values, current) => values.map(([value, label]) => `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(label)}</option>`).join('');
   $('#field-inspector').innerHTML = `<div class="field-form">
-    <label class="form-label">Field name<input data-field-prop="name" aria-label="Field name" maxlength="80" value="${esc(field.name)}" /></label>
-    <label class="form-label">Font<select data-field-prop="font" aria-label="Field font">${options([['NotoSans', 'Noto Sans · Unicode'], ['Helvetica', 'Helvetica'], ['Times-Roman', 'Times Roman'], ['Courier', 'Courier'], ['Custom', state.customFontName ? `Custom · ${state.customFontName}` : 'Custom TTF / OTF']], field.font)}</select></label>
-    <div class="form-pair"><label class="form-label">Max size (pt)<input data-field-prop="fontSize" aria-label="Field font size" type="number" min="4" max="200" value="${field.fontSize}" /></label><label class="form-label">Text colour<input data-field-prop="color" aria-label="Field text colour" type="color" value="${esc(field.color)}" /></label></div>
-    <label class="form-label">Alignment<select data-field-prop="align" aria-label="Field alignment">${options([['left', 'Left'], ['center', 'Centre'], ['right', 'Right']], field.align)}</select></label>
-    <label class="checkbox-label"><input data-field-prop="autoFit" type="checkbox" ${field.autoFit ? 'checked' : ''} />Auto-fit long text</label>
-    <label class="checkbox-label"><input data-field-prop="required" type="checkbox" ${field.required ? 'checked' : ''} />Required on every certificate</label>
+    <label class="form-label">Field name<input data-field-prop="name" aria-label="Field name" placeholder="Enter a field name" maxlength="80" value="${esc(field.name)}" /></label>
+    <label class="form-label">Sample text<input data-field-prop="previewText" aria-label="Field sample text" maxlength="300" value="${esc(field.previewText || sampleText(field))}" /><small>For styling only. Recipient data is used in exports.</small></label>
+    <div class="form-label wide">Font<button type="button" class="font-trigger" data-action="choose-font" aria-label="Field font" value="${esc(field.font)}"><span class="font-trigger-sample" style="font-family:'${fontFamily(field.font)}'">Aa</span><span>${esc(field.font === 'Custom' ? state.customFontName : getFontDefinition(field.font).name)}</span></button></div>
+    <div class="form-pair wide"><label class="form-label">Style<select data-field-prop="fontStyle" aria-label="Field font style">${options(getFontDefinition(field.font).faces.map((face) => [face.id, face.label]), field.fontStyle || 'regular')}</select></label><label class="form-label">Size (pt)<input data-field-prop="fontSize" aria-label="Field font size" type="number" min="4" max="200" value="${field.fontSize}" /></label></div>
+    <div class="form-label wide">Text colour<div class="color-entry"><button type="button" class="color-swatch" style="background:${field.color}" data-action="choose-color" aria-label="Open colour wheel"></button><input data-field-prop="color" class="hex-input" aria-label="Field text colour" value="${esc(field.color.toUpperCase())}" maxlength="7" spellcheck="false" /><button type="button" class="icon-button" data-action="eyedropper" aria-label="Pick colour from screen" title="Pick colour from screen">${icon('eyedropper')}</button></div></div>
+    <div class="form-label wide">Alignment<div class="alignment-group" aria-label="Field alignment">${['left', 'center', 'right'].map((align) => `<button type="button" data-align="${align}" aria-label="Align ${align}" aria-pressed="${field.align === align}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5h16M4 13h16M${align === 'left' ? '4' : align === 'right' ? '10' : '7'} 9h10M${align === 'left' ? '4' : align === 'right' ? '10' : '7'} 17h10"/></svg></button>`).join('')}</div></div>
+    <label class="checkbox-label"><input data-field-prop="autoFit" type="checkbox" ${field.autoFit ? 'checked' : ''} />Fit text to box</label>
+    <label class="checkbox-label"><input data-field-prop="required" type="checkbox" ${field.required ? 'checked' : ''} />Required field</label>
+    <details class="position-settings"><summary>Position & size</summary>
     <div class="form-pair"><label class="form-label">Left (%)<input data-field-prop="x" aria-label="Field left position" type="number" min="0" max="99" step="0.1" value="${(field.x * 100).toFixed(1)}" /></label><label class="form-label">Top (%)<input data-field-prop="y" aria-label="Field top position" type="number" min="0" max="99" step="0.1" value="${(field.y * 100).toFixed(1)}" /></label></div>
     <div class="form-pair"><label class="form-label">Width (%)<input data-field-prop="width" aria-label="Field width" type="number" min="0.5" max="100" step="0.1" value="${(field.width * 100).toFixed(1)}" /></label><label class="form-label">Height (%)<input data-field-prop="height" aria-label="Field height" type="number" min="0.5" max="100" step="0.1" value="${(field.height * 100).toFixed(1)}" /></label></div>
-    <label class="custom-font">Need a different language or typeface?<input type="file" id="custom-font-input" aria-label="Upload custom font" accept=".ttf,.otf" /><span>${state.customFontName ? `Loaded: ${esc(state.customFontName)}` : 'Upload a TTF/OTF font, then choose Custom.'}</span></label>
+    </details><label class="custom-font">Upload your own font<input type="file" id="custom-font-input" aria-label="Upload custom font" accept=".ttf,.otf" /><span>${state.customFontName ? `Loaded: ${esc(state.customFontName)}` : 'TTF or OTF · up to 8 MB'}</span></label>
     <div class="form-actions"><button type="button" class="text-button" data-action="duplicate-field">${icon('copy')} Duplicate</button><button type="button" class="text-button danger" data-action="delete-field">${icon('trash')} Delete field</button></div>
   </div>`;
 }
@@ -206,10 +303,7 @@ async function selectField(id) {
 
 function addField(rect) {
   if (state.fields.length >= 100) throw new Error('This template already has 100 fields.');
-  const names = ['Name', 'Event', 'Date', 'Certificate ID'];
-  const name = names.find((candidate) => !state.fields.some((field) => field.name === candidate)) ?? `Field ${state.fields.length + 1}`;
-  const field = makeField(state.page, rect, name);
-  if (state.imported) field.column = matchColumn(name, state.headers);
+  const field = makeField(state.page, rect);
   state.fields.push(field);
   state.selected = field.id;
   invalidate();
@@ -250,6 +344,7 @@ $('#field-layer').addEventListener('pointermove', (event) => {
     Object.assign(field, constrainRect(rect));
     const element = document.querySelector(`[data-field-box="${field.id}"]`);
     if (element) Object.entries({ left: field.x, top: field.y, width: field.width, height: field.height }).forEach(([key, value]) => { element.style[key] = `${value * 100}%`; });
+    queueEditorPreview();
   }
 });
 
@@ -346,18 +441,10 @@ async function loadRecipients(file) {
   toast(`${data.rows.length.toLocaleString()} recipients imported. Check your column mappings.`);
 }
 
-async function getFontBytes() {
-  fontPromise ??= fetch(`${base}fonts/NotoSans-Regular.ttf`).then((response) => {
-    if (!response.ok) throw new Error('The bundled font is unavailable. Reload and try again.');
-    return response.arrayBuffer();
-  }).then((bytes) => new Uint8Array(bytes)).catch((error) => { fontPromise = null; throw error; });
-  return fontPromise;
-}
-
 async function makeCertificate(rowIndex) {
   const { generateCertificate } = await import('./lib/pdf.js');
-  const fontBytes = state.fields.some((field) => field.font === 'NotoSans') ? await getFontBytes() : undefined;
-  return generateCertificate(state.bytes, state.fields, state.rows[rowIndex], { rowIndex, fontBytes, customFontBytes: state.customFont });
+  const fontData = await certificateFonts(state.fields);
+  return generateCertificate(state.bytes, state.fields, state.rows[rowIndex], { rowIndex, fontData, customFontBytes: state.customFont });
 }
 
 function renderExport() {
@@ -392,18 +479,11 @@ async function previewCertificate() {
     state.previewPdf = pdf;
     const page = await pdf.getPage(state.previewPage + 1);
     if (token !== previewToken) return;
-    const original = page.getViewport({ scale: 1 });
-    const available = Math.max($('#preview-scroll').clientWidth - (innerWidth < 800 ? 30 : 50), 200);
-    const viewport = page.getViewport({ scale: Math.min(available / original.width, 1.6) });
     const canvas = $('#preview-canvas');
-    const ratio = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.ceil(viewport.width * ratio);
-    canvas.height = Math.ceil(viewport.height * ratio);
-    canvas.style.width = `${viewport.width}px`;
-    canvas.style.height = `${viewport.height}px`;
-    previewTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
+    const render = startPageRender(page, availablePageWidth('#preview-scroll'), Number($('#preview-zoom').value));
+    previewTask = render.task;
     await previewTask.promise;
-    if (token === previewToken) { state.previewBytes = bytes; canvas.hidden = false; $('#preview-message').hidden = true; }
+    if (token === previewToken) { commitPageRender(render, canvas); state.previewBytes = bytes; canvas.hidden = false; $('#preview-message').hidden = true; }
   } catch (error) {
     if (token === previewToken && error.name !== 'RenderingCancelledException') {
       $('#preview-message').textContent = errorMessage(error);
@@ -504,14 +584,59 @@ async function openDemo() {
   const { createDemoTemplate } = await import('./lib/pdf.js');
   const bytes = await createDemoTemplate();
   await loadTemplate(new File([bytes], 'sample-certificate.pdf', { type: 'application/pdf' }));
-  const name = makeField(0, { x: .17, y: .48, width: .66, height: .075 }, 'Name');
-  const event = { ...makeField(0, { x: .2, y: .65, width: .6, height: .055 }, 'Event'), source: 'constant', value: 'TECHFUSION 2K26', fontSize: 22, color: '#2563eb' };
-  const id = { ...makeField(0, { x: .36, y: .86, width: .28, height: .04 }, 'Certificate ID'), source: 'sequence', prefix: 'TF26-', fontSize: 10 };
+  const name = { ...makeField(0, { x: .17, y: .455, width: .66, height: .11 }, 'Name'), font: 'GreatVibes', fontSize: 48 };
+  const event = { ...makeField(0, { x: .2, y: .65, width: .6, height: .055 }, 'Event'), source: 'constant', value: 'Sample event', fontStyle: 'bold', fontSize: 22, color: '#2563eb' };
+  const id = { ...makeField(0, { x: .36, y: .86, width: .28, height: .04 }, 'Certificate ID'), source: 'sequence', prefix: 'CERT-', fontSize: 10 };
   state.fields = [name, event, id]; state.selected = name.id;
   state.headers = ['Name'];
-  state.rows = [{ Name: 'Aditi Raman' }, { Name: 'Rahul Subramanian' }, { Name: 'Priya K.' }];
+  state.rows = [{ Name: 'Sample Participant' }, { Name: 'Example Participant' }, { Name: 'Demo Participant' }];
   state.dataFilename = 'Sample data · 3 recipients';
   await goToStep(2);
+}
+
+async function saveInBrowser() {
+  if (!state.bytes || !state.fields.length) throw new Error('Upload a template and add a field first.');
+  const usesCustomFont = state.fields.some((field) => field.font === 'Custom');
+  await saveTemplate({
+    id: state.hash, name: state.file.name, savedAt: Date.now(),
+    bytes: state.bytes.slice(),
+    layout: { version: LAYOUT_VERSION, templateHash: state.hash, fields: structuredClone(state.fields).map((field) => ({ ...field, previewText: '' })) },
+    customFont: usesCustomFont ? state.customFont?.slice() : null,
+    customFontName: usesCustomFont ? state.customFontName : '',
+  });
+  toast('Template saved in this browser only. Recipient lists are not saved.');
+}
+
+async function refreshSavedTemplates() {
+  const records = await listTemplates();
+  records.sort((a, b) => b.savedAt - a.savedAt);
+  $('#saved-template-choice').innerHTML = records.map((record) => `<option value="${esc(record.id)}">${esc(record.name)} · ${esc(new Date(record.savedAt).toLocaleString())}</option>`).join('');
+  $('#saved-template-empty').hidden = !!records.length;
+  $('#saved-template-choice').disabled = !records.length;
+  $('[data-action="restore-saved"]').disabled = !records.length;
+  $('[data-action="delete-saved"]').disabled = !records.length;
+}
+
+async function openSavedTemplates() {
+  await refreshSavedTemplates();
+  $('#saved-templates-dialog').showModal();
+}
+
+async function restoreSavedTemplate(id) {
+  const record = await getTemplate(id);
+  if (!record) throw new Error('This saved template is no longer available.');
+  if (state.pdf && !confirm('Restore this template? Unsaved changes and the current recipient list will be cleared.')) return;
+  await loadTemplate(new File([record.bytes], record.name, { type: 'application/pdf' }));
+  const fields = validateLayout(record.layout, { fingerprint: state.hash, pageCount: state.pdf.numPages });
+  if (record.customFont) {
+    await loadCustomFont(record.customFont);
+    state.customFont = record.customFont; state.customFontName = record.customFontName; state.fontVersion++;
+  }
+  state.fields = fields; state.selected = fields[0].id; state.page = fields[0].page;
+  $('#editor-page').value = state.page;
+  $('#saved-templates-dialog').close();
+  await goToStep(2);
+  toast('Template restored from this browser. Import a recipient list to continue.');
 }
 
 async function loadLayout(file) {
@@ -551,17 +676,21 @@ document.addEventListener('click', (event) => run(async () => {
   if (!target || target.disabled) return;
   if (target.dataset.step) return goToStep(Number(target.dataset.step));
   if (target.dataset.selectField) return selectField(target.dataset.selectField);
+  if (target.dataset.align) { selectedField().align = target.dataset.align; invalidate(); renderSelections(); renderFieldSidebar(); return; }
   if (target.dataset.deleteRow !== undefined) { state.rows.splice(Number(target.dataset.deleteRow), 1); invalidate(); renderTable(); renderValidation(); return; }
   if (target.dataset.downloadResult !== undefined) { const result = state.results[Number(target.dataset.downloadResult)]; return savePdf(result.bytes, result.filename); }
   switch (target.dataset.action) {
     case 'replace-template': $('#template-input').click(); break;
     case 'demo': await openDemo(); break;
     case 'add-field': addField(); break;
+    case 'choose-font': editorControls.openFonts(); break;
+    case 'choose-color': editorControls.openColor(); break;
+    case 'eyedropper': await editorControls.pickFromScreen(); break;
     case 'delete-field': state.fields = state.fields.filter((field) => field.id !== state.selected); state.selected = state.fields[0]?.id ?? null; invalidate(); renderSelections(); renderFieldSidebar(); break;
     case 'duplicate-field': {
       if (state.fields.length >= 100) throw new Error('This template already has 100 fields.');
       const original = state.fields.find((field) => field.id === state.selected);
-      const duplicate = { ...original, id: crypto.randomUUID(), name: `${original.name} copy`, y: clamp(original.y + .05, 0, 1 - original.height) };
+      const duplicate = { ...original, id: crypto.randomUUID(), name: '', column: '', y: clamp(original.y + .05, 0, 1 - original.height) };
       state.fields.push(duplicate); state.selected = duplicate.id; invalidate(); renderSelections(); renderFieldSidebar(); break;
     }
     case 'import-data': $('#data-input').click(); break;
@@ -573,8 +702,17 @@ document.addEventListener('click', (event) => run(async () => {
       if (!headers.length) headers.push('Recipient');
       saveBlob(new Blob([toCsv([Object.fromEntries(headers.map((header, index) => [header, index === 0 ? 'Sample Recipient' : 'Sample value']))])], { type: 'text/csv;charset=utf-8' }), 'certgen-recipients-sample.csv'); break;
     }
-    case 'save-layout': saveBlob(new Blob([JSON.stringify({ version: LAYOUT_VERSION, templateName: state.file.name, templateHash: state.hash, fields: state.fields }, null, 2)], { type: 'application/json' }), 'certgen-layout.json'); toast('Layout saved. Recipient data is not included.'); break;
-    case 'load-layout': if (!state.pdf) throw new Error('Upload your PDF template first, then load its saved layout.'); $('#layout-input').click(); break;
+    case 'save-layout': await saveInBrowser(); break;
+    case 'load-layout': await openSavedTemplates(); break;
+    case 'close-saved': $('#saved-templates-dialog').close(); break;
+    case 'restore-saved': await restoreSavedTemplate($('#saved-template-choice').value); break;
+    case 'delete-saved': {
+      const id = $('#saved-template-choice').value;
+      if (!id) throw new Error('Choose a saved template first.');
+      if (!confirm('Delete this saved template from this browser? This cannot be undone.')) break;
+      await deleteTemplate(id); await refreshSavedTemplates(); toast('Saved template deleted from this browser.'); break;
+    }
+    case 'import-layout': if (!state.pdf) throw new Error('Upload your PDF template first, then import a layout.'); $('#saved-templates-dialog').close(); $('#layout-input').click(); break;
     case 'generate': await generateBatch(); break;
     case 'cancel': state.controller?.abort(); toast('Stopping after the current certificate. Completed PDFs will remain available.'); break;
     case 'download-zip': await downloadZip(); break;
@@ -595,14 +733,17 @@ document.addEventListener('change', (event) => run(async () => {
   if (target.dataset.fieldProp) {
     const field = state.fields.find((item) => item.id === state.selected);
     const key = target.dataset.fieldProp;
+    if (key === 'color') { if (!normalizeHex(target.value)) { target.setCustomValidity('Enter a valid hex colour, such as #142D4E.'); target.reportValidity(); return; } setFieldColor(target.value); return; }
     if (['x', 'y', 'width', 'height'].includes(key)) {
       if (!Number.isFinite(Number(target.value))) throw new Error('Enter a valid field position.');
       field[key] = Number(target.value) / 100; Object.assign(field, constrainRect(field));
     } else if (key === 'fontSize') field.fontSize = clamp(Number(target.value) || 30, 4, 200);
     else if (target.type === 'checkbox') field[key] = target.checked;
-    else if (key === 'name') { field.name = target.value.trim() || 'Untitled field'; if (!state.imported && !state.headers.length) field.column = field.name; }
+    else if (key === 'name') { field.name = target.value.trim(); if (!state.imported) field.column = field.name; }
     else field[key] = target.value;
-    invalidate(); renderSelections(); renderFieldSidebar();
+    if (key === 'fontStyle') await loadFont(field.font, field.fontStyle);
+    invalidate(); renderSelections();
+    if (key === 'name') renderFieldSidebar();
   }
   if (target.dataset.mapProp) {
     const field = state.fields.find((item) => item.id === target.closest('[data-map-field]').dataset.mapField);
@@ -618,20 +759,27 @@ document.addEventListener('change', (event) => run(async () => {
     invalidate(); renderValidation();
   }
   if (target.id === 'editor-page') { state.page = Number(target.value); await renderEditor(); }
-  if (target.id === 'editor-zoom') await renderEditor();
+  if (target.id === 'editor-zoom') { $('#preview-zoom').value = target.value; await renderEditor(); }
+  if (target.id === 'preview-zoom') { $('#editor-zoom').value = target.value; await previewCertificate(); }
+  if (target.id === 'show-samples') renderSelections();
   if (target.id === 'preview-recipient') { state.previewIndex = Number(target.value); await previewCertificate(); }
   if (target.id === 'preview-page') { state.previewPage = Number(target.value); await previewCertificate(); }
   if (target.id === 'layout-input' && target.files[0]) { const file = target.files[0]; target.value = ''; await loadLayout(file); }
   if (target.id === 'custom-font-input' && target.files[0]) {
     const file = target.files[0];
     if (!/\.(ttf|otf)$/i.test(file.name) || file.size > 8 * 1024 * 1024) throw new Error('Choose a TTF/OTF font smaller than 8 MB.');
-    state.customFont = new Uint8Array(await file.arrayBuffer()); state.customFontName = file.name;
-    const field = state.fields.find((item) => item.id === state.selected); if (field) field.font = 'Custom';
-    invalidate(); renderFieldSidebar(); toast('Custom font loaded. Check the preview to confirm all characters render.');
+    const bytes = new Uint8Array(await file.arrayBuffer()); await loadCustomFont(bytes);
+    state.customFont = bytes; state.customFontName = file.name; state.fontVersion++;
+    const field = state.fields.find((item) => item.id === state.selected); if (field) { field.font = 'Custom'; field.fontStyle = 'regular'; }
+    invalidate(); renderFieldSidebar(); renderSelections(); toast('Custom font loaded. Check the preview to confirm all characters render.');
   }
 }));
 
 $('#recipient-search').addEventListener('input', (event) => { state.search = event.target.value; state.tablePage = 0; renderTable(); });
+document.addEventListener('input', (event) => {
+  if (event.target.dataset.fieldProp === 'previewText' && selectedField()) { selectedField().previewText = event.target.value; renderSelections(); }
+  if (event.target.dataset.fieldProp === 'color') event.target.setCustomValidity('');
+});
 let resizeTimer;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => run(async () => { if (state.step === 2) await renderEditor(); if (state.step === 4) await previewCertificate(); }), 180); });
 window.addEventListener('beforeunload', (event) => { if (state.generating) { event.preventDefault(); event.returnValue = ''; } });

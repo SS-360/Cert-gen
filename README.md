@@ -11,30 +11,46 @@ npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:4173**. Use **Open sample project** to try a complete AAACET certificate and three sample recipients.
+Open **http://127.0.0.1:4173**. Use **Open sample project** to try a complete Sample institution certificate and three sample recipients.
 
 The old `index.production.html` URL redirects to the new app. Opening the source as a `file://` URL is no longer supported; use the development server or serve the production build.
 
 ## Certificate workflow
 
 1. **Template:** upload an unlocked PDF (up to 25 MB). Original pages, vector artwork, page rotation, and crop boxes are preserved.
-2. **Design fields:** draw, drag, or resize a box on any PDF page. Set each field's font, size, colour, alignment, auto-fit, and required status. Use the position inputs or arrow keys for precise placement. On a touch screen, use Add field and the numeric controls, or drag the boxes.
+2. **Design fields:** draw, drag, or resize a box on any PDF page. Sample text appears inside the boxes in the selected font and colour. Set the font, style, size, colour, alignment, fit, and required status. Expand **Position & size** for precise coordinates, or use arrow keys to move a selected box. On a touch screen, use Add field and the numeric controls, or drag the boxes.
 3. **Recipients:** import CSV, TSV, or the first worksheet of an Excel `.xlsx` file (up to 10 MB / 5,000 recipients). Quoted commas, embedded newlines, UTF-8 BOMs, and zero values are handled correctly. Map each field to a column, a shared value, or an auto-numbered certificate ID. Edit, search, and paginate the imported list.
-4. **Preview & export:** inspect an actual generated PDF for any recipient and page, then generate the batch. Download individual PDFs in a ZIP or one combined PDF. Each filename has a row number so duplicate names cannot overwrite one another.
+4. **Review & export:** inspect an actual generated PDF for any recipient and page, then generate the batch. Download individual PDFs in a ZIP or one combined PDF. Each filename has a row number so duplicate names cannot overwrite one another.
 
 Missing required values block the batch. Generation failures are reported with their row and reason; no failed certificates are silently counted as successes. Stopping generation retains completed PDFs. The ZIP includes a CSV report with Generated, Failed, or Not processed status for every recipient.
 
 ## Fonts and languages
 
-Noto Sans is bundled and embedded in the PDFs. It supports Latin, Greek, and Cyrillic text. Helvetica, Times Roman, and Courier are also available.
+Click **Font** to open a searchable, visual typeface library. Each row shows your sample text in the real font. Filter by sans serif, serif, cursive, handwriting, display, monospace, or Tamil. The library contains **26 bundled typefaces / 52 real font files**, plus the three standard PDF families Helvetica, Times Roman, and Courier. The Style menu offers only variants actually available for the selected typeface: regular, bold, italic, or bold italic. PDF exports embed the same font files used by the editor. Font files load locally on demand, with no Google Fonts or runtime CDN calls.
 
-For Tamil or another script, upload a compatible `.ttf` or `.otf` font and choose **Custom** on the affected fields. A font must contain all required characters; unsupported characters produce an actionable error. Review the real PDF preview for script shaping and your specific font before generating the whole batch. Custom fonts are used only in this browser session.
+Noto Sans supports Latin, Greek, and Cyrillic. Noto Sans Tamil is included for Tamil. You can also upload a compatible `.ttf` or `.otf` font (up to 8 MB); it is selected immediately and remains available in the font browser for this session. A font must contain all required characters; unsupported characters produce an actionable error. Review the real PDF preview for script shaping and your specific font before generating the whole batch.
+
+**Sample text** never replaces recipient names, mapped columns, shared values, or certificate IDs in exported PDFs. The design canvas generates an actual PDF using the same font embedding, auto-fit, line metrics, alignment and baseline calculations as export; there is no separate HTML lettering approximation. When sample text matches recipient data, both canvases render the same pixels at the same viewport width and zoom. Without a custom sample override, the design canvas uses the recipient last selected in Review & export. Turn off **Show sample text** to inspect the original template.
+
+The **Zoom** controls in Design fields and Review & export stay linked. They affect only on-screen magnification, never the stored font size or field positions. A live status reports when the PDF preview is updating or when text cannot fit/render; no approximate HTML fallback hides an export error. Rapid edits discard superseded renders before displaying the latest result.
+
+## Text colour
+
+Click the colour swatch for a hue/saturation wheel, brightness slider, exact hue/saturation values, hex input, presets, and the system colour picker. Drag the wheel, or use Left/Right for hue and Up/Down for saturation. Three- and six-digit hex colours are accepted. All controls update the selected field immediately.
+
+**Pick from screen** uses the browser's EyeDropper API on compatible browsers and secure origins (including localhost). Cancelling leaves the previous colour unchanged. If unavailable, the wheel, hex input, and system picker still work. The chosen colour is saved in layouts and used in exported PDFs.
+
+## Visual identity
+
+The workspace follows the SS-360 warm-paper, near-black, violet, fine-rule design standard with Noto Sans interface typography. The top-left logo and favicon use a custom pixel-art certificate-and-ribbon emblem, not CG initials. Production PNGs are in `public/brand/`; `certgen-pixel-512.png` is the largest bundled transparent version. The emblem was generated with the built-in image generator and resized with nearest-neighbour sampling. The interface itself is native HTML/CSS, not a flattened concept image.
 
 ## Reuse a layout
 
-Save layout downloads a small JSON configuration with field coordinates, styles, and column mappings. It does not contain recipient data, the template, or font files. To restore it, upload the same PDF and load the JSON. The app checks a SHA-256 fingerprint to prevent applying positions to the wrong template. Re-upload a custom font if the layout used one.
+**Save layout** stores the original PDF, field settings, mappings, shared values, and any required custom font in **IndexedDB in this browser only**. Recipient lists, generated certificates, and sample-text overrides are not saved. Saving the same PDF replaces its previous saved version. **Load layout** lists local templates and provides Restore and Delete controls. Existing JSON layouts can still be imported after uploading their original PDF; fingerprints prevent using the wrong template.
 
-Nothing is silently persisted: refreshing the page clears the in-memory project. Save the layout before leaving.
+Nothing is silently persisted. Refreshing clears the in-memory project; explicitly saved templates remain in this browser profile on this origin. They never sync to another domain, browser, device, account, or server. Clearing site data, private browsing, quota eviction, or uninstalling a browser can remove them. Keep original files. Anyone using the same browser profile can access saved templates. Import recipients again after restoring a template.
+
+Newly drawn, added, and duplicated fields have **empty names**. Enter your own name in Text properties before continuing to recipients. The optional sample project uses clearly fictional placeholder content to demonstrate mapping; it never modifies your uploaded templates.
 
 ## Build and host
 
@@ -44,6 +60,12 @@ npm run preview
 ```
 
 Publish the `dist/` directory on any static host. No backend, API key, database, or runtime CDN is required. The PDF worker, CMaps, standard-font data, and WASM decoders are bundled locally. The heavier PDF, font, ZIP, and Excel modules load only when needed.
+
+### Vercel
+
+Import this repository into Vercel and select the intended branch. Framework: **Vite**; build command: **npm run build**; output: **dist**; Node: **24.x**; no environment variables or storage integrations. `vercel.json` records the build settings and security headers. No serverless functions, analytics, telemetry SDK, or file-upload endpoints are included. Use a public deployment without Vercel Authentication if everyone should access it. This repository preparation does not itself deploy the application.
+
+The application sends no uploaded file contents to a server. A static hosting provider still receives ordinary asset requests and may retain access logs (for example IP address, browser, and URL). Local storage is not encrypted and is not a backup service.
 
 The app makes same-origin requests for its own assets. It does not send recipient data to third parties. Imported files are still untrusted: only process files you are permitted to use. PDF templates must be unlocked and editable.
 
@@ -56,7 +78,7 @@ npm run test:e2e
 npm run build
 ```
 
-Core tests cover CSV edge cases, validation, safe filenames, text fitting, font errors, layout validation, and multi-page / rotated / cropped PDFs. Browser tests exercise imports, real preview text, actual ZIP/PDF downloads, a 100-recipient batch, cancellation, and a 390 px mobile viewport.
+Core tests cover CSV edge cases, validation, safe filenames, text fitting, every bundled font/style, colour conversion, layout compatibility, shared zoom geometry, and multi-page / rotated / cropped PDFs. Browser tests also compare the design/export canvas pixels and displayed dimensions directly for cursive, standard serif bold, bold italic, alignment, multiline auto-fit, linked zoom, cropped/rotated pages and mobile at DPR 2. Set `CERTGEN_QA_TEMPLATE` to a local PDF to run the portrait comparison against your own certificate instead of the generated fixture. Other checks cover font search/categories/style previews, sample-only text isolation, embedded fonts and exact PDF colours, wheel/hex/native-picker synchronization, a mocked EyeDropper API, imports, real ZIP/PDF downloads, a 100-recipient batch, cancellation, and a 390 px mobile viewport. Native OS colour dialogs and screen capture prompts require manual browser interaction; tests cover the app's event/API integration rather than those OS interfaces.
 
 GitHub Actions runs the core tests, production build, and Chromium workflow checks on pushes and pull requests.
 
@@ -66,8 +88,12 @@ GitHub Actions runs the core tests, production build, and Chromium workflow chec
 - `src/lib/data.js` — spreadsheet parsing, mappings, row validation, filenames
 - `src/lib/layout.js` — normalized field geometry and layout validation
 - `src/lib/pdf.js` — vector PDF generation, font embedding, rotation transforms
+- `src/lib/fonts.js`, `font-loader.js` — font catalogue and lazy local FontFace/PDF loading
+- `src/editor-controls.js`, `src/lib/color.js` — visual font browser and accessible colour controls
 - `src/styles.css` — responsive interface
-- `public/fonts/` — Noto Sans and its SIL Open Font License
+- `public/fonts/` — bundled open-source fonts and per-family licences
+- `scripts/download-fonts.mjs` — repeatable download of official font sources (not needed to build/run)
+- `public/brand/` — generated pixel certificate emblem and favicon
 - `tests/` — core and browser regression tests
 
 MIT. Third-party fonts and dependencies retain their respective licenses.
