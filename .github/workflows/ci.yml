@@ -1,0 +1,28 @@
+name: Certificate generator checks
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Verify built static app under production security headers
+        run: npx playwright test tests/e2e/privacy.spec.js -g 'Production security'
+        env:
+          CERTGEN_PRODUCTION_QA: '1'
+          CERTGEN_TEST_PORT: '4175'
