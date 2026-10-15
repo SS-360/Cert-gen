@@ -1,1 +1,7 @@
 node_modules/
+dist/
+public/pdfjs/
+test-results/
+playwright-report/
+.env*
+!.env.example

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Create personalized certificates in bulk from your PDF template and CSV or Excel list. Your files stay in your browser." />
+    <meta name="theme-color" content="#2563eb" />
+    <title>CertGen — Bulk Certificate Studio</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%232563eb'/%3E%3Cpath d='M14 12h20v24H14zM19 19h10M19 24h10M19 29h6' stroke='white' stroke-width='2.5' fill='none'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Skip to workspace</a>
+    <header class="app-header">
+      <a class="brand" href="./" aria-label="CertGen home"><span class="brand-icon" data-icon="certificate"></span><span>CertGen<span class="brand-subtitle">Certificate studio</span></span></a>
+      <div class="header-actions">
+        <span class="privacy-note"><span data-icon="shield"></span> Private by design</span>
+        <button type="button" class="button secondary small" data-action="load-layout"><span data-icon="folder"></span>Load layout</button>
+        <button type="button" class="button secondary small" id="save-layout" data-action="save-layout" disabled><span data-icon="save"></span>Save layout</button>
+        <input type="file" id="layout-input" accept=".json,application/json" hidden />
+      </div>
+    </header>
+    <main id="main" class="workspace">
+      <nav class="steps" aria-label="Certificate workflow">
+        <button type="button" class="step active" data-step="1" aria-current="step"><span class="step-number">1</span><span>Template</span></button>
+        <span class="step-line"></span>
+        <button type="button" class="step" data-step="2" disabled><span class="step-number">2</span><span>Design fields</span></button>
+        <span class="step-line"></span>
+        <button type="button" class="step" data-step="3" disabled><span class="step-number">3</span><span>Recipients</span></button>
+        <span class="step-line"></span>
+        <button type="button" class="step" data-step="4" disabled><span class="step-number">4</span><span>Preview & export</span></button>
+      </nav>
+      <div id="notice" class="notice" role="alert" hidden></div>
+
+      <section id="step-1" class="step-section" aria-labelledby="heading-1">
+        <div class="section-heading"><div><h1 id="heading-1" tabindex="-1">One template. Every recipient.</h1><p>Turn your certificate design into a personalized PDF for everyone on your list.</p></div></div>
+        <div class="welcome-layout">
+          <div class="panel upload-panel">
+            <h2>Your certificate starts here</h2><p class="muted">Upload a finished PDF with space for names and event details.</p>
+            <div class="drop-zone" id="template-drop" role="button" tabindex="0" aria-label="Upload PDF certificate template">
+              <span class="upload-symbol" data-icon="upload"></span>
+              <strong>Drop your PDF template here</strong><span>or <span class="link-text">browse files</span></span>
+              <small>PDF · up to 25 MB · multiple pages supported</small>
+            </div>
+            <input type="file" id="template-input" accept="application/pdf,.pdf" hidden />
+            <div id="template-info" class="file-info" hidden></div>
+            <div class="panel-bottom"><span class="muted small-text">Your original design stays sharp.</span><button type="button" class="button primary" id="template-next" data-step="2" disabled>Design fields<span data-icon="arrow-right"></span></button></div>
+          </div>
+          <aside class="welcome-aside">
+            <h2>A simple path to a great batch.</h2>
+            <ol class="workflow-guide">
+              <li><span data-icon="select"></span><div><strong>Place your fields</strong><p>Draw where each name, event, or ID should go. Set the font and alignment.</p></div></li>
+              <li><span data-icon="table"></span><div><strong>Bring your list</strong><p>Import CSV or Excel, connect your columns, and set values shared by everyone.</p></div></li>
+              <li><span data-icon="download"></span><div><strong>Check, then download</strong><p>Preview a real certificate. Export individual PDFs in a ZIP or one combined PDF.</p></div></li>
+            </ol>
+            <div class="demo-box"><strong>Want to see it in action?</strong><p>A sample template and three recipients are ready to try.</p><button type="button" class="button secondary" data-action="demo">Open sample project<span data-icon="arrow-right"></span></button></div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="step-2" class="step-section" aria-labelledby="heading-2" hidden>
+        <div class="section-heading"><div><h1 id="heading-2" tabindex="-1">Give your data a place.</h1><p>Draw a box on the certificate, or add a field and position it. Each field has its own style.</p></div><div class="actions"><button type="button" class="button secondary" data-step="1">Back</button><button type="button" class="button primary" id="fields-next" data-step="3" disabled>Add recipients<span data-icon="arrow-right"></span></button></div></div>
+        <div class="editor-layout">
+          <div class="panel canvas-panel">
+            <div class="canvas-toolbar"><div class="actions"><label class="inline-label">Page<select id="editor-page" aria-label="Template page"></select></label><label class="inline-label">Zoom<select id="editor-zoom" aria-label="Template zoom"><option value="1">Fit</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></label></div><button type="button" class="button secondary small" data-action="add-field"><span data-icon="plus"></span>Add field</button></div>
+            <div class="canvas-scroll" id="editor-scroll"><div class="page-surface" id="editor-surface"><canvas id="editor-canvas" aria-label="PDF certificate template"></canvas><div id="field-layer"></div></div></div>
+            <div class="canvas-footer"><span data-icon="select"></span>Drag to draw · move a box · resize from its corner<span id="page-dimensions"></span></div>
+          </div>
+          <aside class="panel inspector"><div class="inspector-title"><h2>Fields</h2><span id="field-count" class="count">0</span></div><div id="field-list" class="field-list"></div><div id="field-inspector"></div><div class="inspector-foot"><span data-icon="info"></span>Positions stay accurate when you change zoom, screen size, or PDF page.</div></aside>
+        </div>
+      </section>
+
+      <section id="step-3" class="step-section" aria-labelledby="heading-3" hidden>
+        <div class="section-heading"><div><h1 id="heading-3" tabindex="-1">Meet your recipients.</h1><p>Import your spreadsheet, match the fields, and check the list before generating.</p></div><div class="actions"><button type="button" class="button secondary" data-step="2">Back to fields</button><button type="button" class="button primary" id="data-next" data-step="4" disabled>Preview certificates<span data-icon="arrow-right"></span></button></div></div>
+        <div class="panel data-import-bar"><div id="data-drop" role="button" tabindex="0" aria-label="Import recipient CSV or Excel file"><span class="round-icon" data-icon="upload"></span><div><strong>Import your recipient list</strong><p id="data-file-label">CSV, TSV, or Excel .xlsx · up to 5,000 recipients</p></div></div><div class="actions"><button type="button" class="button secondary" data-action="sample-csv"><span data-icon="download"></span>Sample CSV</button><button type="button" class="button primary" data-action="import-data">Choose file</button></div><input type="file" id="data-input" accept=".csv,.tsv,.xlsx,.txt" hidden /></div>
+        <div class="panel mapping-panel"><div class="panel-heading"><div><h2>Connect your data</h2><p class="muted">Map a column, use a shared value, or create a unique sequential ID.</p></div></div><div id="column-mappings"></div></div>
+        <div class="panel table-panel"><div class="table-toolbar"><div><h2>Recipient list <span id="recipient-count" class="count">0</span></h2><p class="muted small-text">Click a cell to edit. Duplicate names get separate files.</p></div><div class="actions"><input type="search" id="recipient-search" placeholder="Search recipients…" aria-label="Search recipients" /><button type="button" class="button secondary" data-action="add-row"><span data-icon="plus"></span>Add recipient</button></div></div><div class="table-scroll"><table id="recipient-table"><thead></thead><tbody></tbody></table></div><div class="table-pagination"><span id="table-range"></span><div class="actions"><button type="button" class="button secondary small" id="table-prev" data-action="previous-table-page">Previous</button><button type="button" class="button secondary small" id="table-next" data-action="next-table-page">Next</button></div></div></div>
+        <div id="data-validation" class="validation-summary" aria-live="polite"></div>
+      </section>
+
+      <section id="step-4" class="step-section" aria-labelledby="heading-4" hidden>
+        <div class="section-heading"><div><h1 id="heading-4" tabindex="-1">A final look. Then, everyone.</h1><p>The preview is generated from the same PDF used for your downloads.</p></div><button type="button" class="button secondary" data-step="3">Back to recipients</button></div>
+        <div class="export-layout"><aside class="panel export-settings"><h2>Your batch</h2><dl id="batch-summary" class="batch-summary"></dl><div id="export-validation"></div><div class="export-action"><button type="button" class="button primary full-width" id="generate-button" data-action="generate"><span data-icon="spark"></span>Generate certificates</button><p class="muted small-text">PDFs are created on this device. No account or server needed.</p></div><div id="generation-progress" hidden><div class="progress-title"><strong id="progress-label">Preparing…</strong><button type="button" class="text-button danger" data-action="cancel">Stop generation</button></div><progress id="progress" max="100" value="0" aria-label="Certificate generation progress"></progress><p id="progress-detail" class="muted small-text" aria-live="polite"></p></div><div id="download-results" hidden></div></aside><div class="panel preview-panel"><div class="canvas-toolbar"><label class="inline-label">Recipient<select id="preview-recipient" aria-label="Preview recipient"></select></label><label class="inline-label">Page<select id="preview-page" aria-label="Preview page"></select></label><button type="button" class="button secondary small" data-action="download-preview"><span data-icon="download"></span>PDF</button></div><div class="preview-scroll" id="preview-scroll"><canvas id="preview-canvas" aria-label="Personalized certificate preview"></canvas><p id="preview-message" role="status"></p></div></div></div>
+      </section>
+      <footer class="app-footer"><span>CertGen · Thoughtful certificates, without the repetitive work.</span><span><span data-icon="lock"></span>Files are processed in your browser</span></footer>
+    </main>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
